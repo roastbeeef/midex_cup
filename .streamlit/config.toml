@@ -1,0 +1,7 @@
+[theme]
+primaryColor = "#1A472A"          # Masters green
+backgroundColor = "#F5F5DC"       # Creamy Augusta paper
+secondaryBackgroundColor = "#E6E6D6"
+textColor = "#1A472A"
+font = "serif"
+base = "light"
