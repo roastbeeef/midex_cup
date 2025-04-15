@@ -261,8 +261,8 @@ with tabs[0]:
         - [Monzo](https://monzo.me/mattwilson1)  
         - [PayPal](https://paypal.me/mattwilson1234)  
         - Bank transfer (📱 drop Matt a WhatsApp)  
-        - Add credit to his pro shop account  
-        - Or arrange to pay cash  
+        - Add credit to my pro shop account  
+        - Or arrange to pay cash (pls no)
 
         ⚠️ *Entry must be confirmed before you play your round — no exceptions!*
         """)
