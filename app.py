@@ -256,7 +256,7 @@ with tabs[0]:
     with col_right:
         st.markdown("### 📝 How do I sign up?")
         st.markdown("""
-        Everyone is welcome, <br>
+        Everyone is welcome,\
         just send **Matt Wilson** some money using one of the following methods:
 
         - [Monzo](https://monzo.me/mattwilson1)  
