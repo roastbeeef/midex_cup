@@ -1,46 +1,83 @@
 import streamlit as st
 import pandas as pd
 import gspread
-import re
 from oauth2client.service_account import ServiceAccountCredentials
 from collections import defaultdict
 
+# CONFIG
+GOOGLE_SHEET_NAME = "midex_2025"
+EVENT_TABS = {
+    "May Stableford": "Standard Event",
+    "May Medal": "Elevated Event",
+    "Rover Medal": "Major",
+    "Stableford Handicap Trophy": "Major",
+    "Club Championships (r1)": "Playoff Event",
+    "Club Championships (r2)": "Playoff Event",
+    "July Stableford": "Standard Event",
+    "August Stableford (Red Tee)": "Standard Event",
+    "August Medal": "Elevated Event",
+    "August Stableford": "Standard Event",
+    "Mid Sussex Masters": "Major",
+    "September Stableford": "Standard Event"
+}
 
-# GLOBALS
-GOOGLE_SHEET_NAME = "heronsdale_2025"
+POINTS_TABLE = {
+    "Standard Event": [300, 180, 114, 81, 66, 60, 54, 51, 48, 45, 42, 39, 36, 34, 33, 32],
+    "Elevated Event": [550, 330, 209, 149, 121, 110, 99, 94, 88, 83, 77, 72, 66, 63, 61, 58],
+    "Major": [750, 450, 285, 203, 165, 150, 135, 128, 120, 113, 105, 98, 90, 86, 83, 80],
+    "Playoff Event": [1200, 720, 456, 324, 264, 240, 216, 204, 192, 180, 168, 156, 144, 137, 132, 127],
+}
 
-# Auth setup
+# Streamlit Config
+st.set_page_config(page_title="The MidEx Cup 2024", layout="wide")
+
 @st.cache_resource
 def get_gsheet_client():
-    import json
-    from oauth2client.service_account import ServiceAccountCredentials
-
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-
-    # Load and manually fix private_key line breaks
     creds_dict = dict(st.secrets["gcp_service_account"])
     if "\\n" in creds_dict["private_key"]:
         creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-    
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
 
-st.set_page_config(page_title="Heronsdale 2025 Side Action", layout="wide")
-
 @st.cache_data(ttl=300)
-def load_eligible_player_names():
+def load_event_results(sheet_name):
     client = get_gsheet_client()
-    sheet = client.open(GOOGLE_SHEET_NAME).worksheet("entries")
+    sheet = client.open(GOOGLE_SHEET_NAME).worksheet(sheet_name)
     data = sheet.get_all_values()
-    df = pd.DataFrame(data[1:], columns=data[0])  # Skip header row
-    eligible_names = df["Name"].dropna().unique().tolist()
-    total_entries = df['total_entries'].astype(int).sum()
-    total_prize_fund = df['total_paid'].astype(int).sum()
-    return [name.strip() for name in eligible_names], total_entries, total_prize_fund
+    df = pd.DataFrame(data[1:], columns=data[0])
+    df = df[["Position", "Name"]]
+    df["Position"] = pd.to_numeric(df["Position"], errors="coerce")
+    df = df.dropna(subset=["Position"])
+    df["Position"] = df["Position"].astype(int)
+    df["Name"] = df["Name"].str.strip()
+    return df.sort_values("Position")
 
+def calculate_points(event_type, position):
+    table = POINTS_TABLE.get(event_type, [])
+    return table[position - 1] if 1 <= position <= len(table) else 0
 
-def styled_table(df):
-    def highlight_top3(row):
+def aggregate_points():
+    player_points = defaultdict(int)
+    event_breakdown = defaultdict(list)
+
+    for sheet_name, label in EVENT_TABS.items():
+        df = load_event_results(sheet_name)
+        for _, row in df.iterrows():
+            name = row["Name"]
+            pos = row["Position"]
+            pts = calculate_points(label, pos)
+            player_points[name] += pts
+            event_breakdown[name].append((sheet_name, pts))
+
+    leaderboard = pd.DataFrame([
+        {"Name": name, "Points": points, "Events": event_breakdown[name]}
+        for name, points in player_points.items()
+    ])
+    return leaderboard.sort_values("Points", ascending=False).reset_index(drop=True)
+
+def styled_leaderboard(df):
+    def highlight(row):
         if row.name == 0:
             return ["background-color: #FFD700; font-weight: bold;"] * len(row)
         elif row.name == 1:
@@ -50,249 +87,63 @@ def styled_table(df):
         else:
             return [""] * len(row)
 
-    styled = (
+    df_styled = (
         df.style
-        .apply(highlight_top3, axis=1)
-        .format(na_rep="", formatter={col: "{:.0f}" for col in df.columns if df[col].dtype in ['float64', 'int64']})
-        .set_table_styles([
-            {"selector": "th", "props": [("text-align", "center")]},
-            {"selector": "td", "props": [("text-align", "center")]},
-        ])
-        .set_properties(**{
-            "text-align": "center",
-            "font-family": "Georgia",
-            "font-size": "16px"
-        })
+        .apply(highlight, axis=1)
+        .format({"Points": "{:,.0f}"})
+        .set_properties(**{"text-align": "center", "font-family": "Georgia", "font-size": "16px"})
         .hide(axis="index")
     )
+    return st.markdown(df_styled.to_html(escape=False), unsafe_allow_html=True)
 
-    return st.markdown(styled.to_html(escape=False), unsafe_allow_html=True)
-
-
-
-# Load round data from Google Sheets
-def load_round_data(sheet_name, allowed_names=None):
-    client = get_gsheet_client()
-    sheet = client.open(GOOGLE_SHEET_NAME).worksheet(sheet_name)
-    
-    # Read all data
-    data = sheet.get_all_values()
-    
-    if not data or not any(row for row in data if any(cell.strip() for cell in row)):
-        return pd.DataFrame(columns=["Day", "Position", "Name", "Handicap", "Score"])
-
-    cleaned_data = [row[:4] for row in data if len(row) >= 4]
-    df = pd.DataFrame(cleaned_data, columns=["Day", "Position", "NameRaw", "Score"])
-    df["Score"] = pd.to_numeric(df["Score"], errors="coerce")
-
-    def split_name_handicap(name_raw):
-        match = re.match(r"^(.*?)\((\d+)\)$", name_raw.strip())
-        if match:
-            return match.group(1).strip(), int(match.group(2))
-        return name_raw.strip(), None
-
-    df[["Name", "Handicap"]] = df["NameRaw"].apply(
-        lambda x: pd.Series(split_name_handicap(x))
-    )
-
-    # Only keep players in the allowed list
-    if allowed_names is not None:
-        df = df[df["Name"].isin(allowed_names)]
-
-    return df[["Day", "Position", "Name", "Handicap", "Score"]]
-
-
-def calculate_places_paid(total_entries):
-    base_places = 3
-    max_places = 5
-    extra_places = max(0, (total_entries - 30) // 10)
-    return min(base_places + extra_places, max_places)
-
-def clean_name(name):
-    return name.split("(")[0].strip()
-
-def get_main_leaderboard(dfs, side_pot_players):
-    all_scores = defaultdict(list)
-
-    # Collect scores from all round data
-    for df in dfs:
-        for _, row in df.iterrows():
-            name = clean_name(row["Name"])
-            score = row["Score"]
-            if pd.notnull(score):
-                all_scores[name].append(score)
-
-    # Ensure all side pot players are included, even with no scores
-    for name in side_pot_players:
-        if name not in all_scores:
-            all_scores[name] = []
-
-    leaderboard = []
-    for name in sorted(all_scores.keys()):
-        scores = all_scores[name]
-        scores.sort(reverse=True)
-        best = scores[0] if len(scores) > 0 else 0
-        second_best = scores[1] if len(scores) > 1 else 0
-        leaderboard.append((name, best, second_best))
-
-    df_leader = pd.DataFrame(leaderboard, columns=["Name", "Best Score", "Second Best"])
-    df_leader = df_leader.sort_values(by=["Best Score", "Second Best"], ascending=False).reset_index(drop=True)
-    df_leader["Position"] = df_leader.index + 1
-    df_leader["Medal"] = df_leader["Position"].map({1: "🥇", 2: "🥈", 3: "🥉"}).fillna("")
-    df_leader["Name"] = df_leader["Name"].apply(lambda x: f"<b>{x}</b>")
-    return df_leader[["Position", "Medal", "Name", "Best Score", "Second Best"]]
-
-
-
-def get_full_leaderboard(round_dfs, side_pot_players):
-    # Collect all names from every round (no filtering!)
-    all_names = set()
-    for df in round_dfs.values():
-        all_names.update(df["Name"].tolist())
-
-    all_names = sorted(all_names)
-
-    leaderboard_data = []
-    for name in all_names:
-        scores = []
-        for day in ["day_1", "day_2", "day_3", "day_4"]:
-            df = round_dfs[day]
-            score = df.loc[df["Name"] == name, "Score"]
-            scores.append(score.values[0] if not score.empty else 0)
-
-        best_two = sum(sorted(scores, reverse=True)[:2])
-        leaderboard_data.append((name, *scores, best_two))
-
-    df_leader = pd.DataFrame(leaderboard_data, columns=["Name", "Round 1", "Round 2", "Round 3", "Round 4", "Best 2"])
-    df_leader = df_leader.sort_values(by="Best 2", ascending=False).reset_index(drop=True)
-
-    df_leader["Medal"] = df_leader.index.map({0: "🥇", 1: "🥈", 2: "🥉"}).fillna("")
-    df_leader["Position"] = df_leader.index + 1
-
-    # Reorder columns
-    columns = ["Position", "Medal", "Name", "Round 1", "Round 2", "Round 3", "Round 4", "Best 2"]
-    df_leader = df_leader[columns]
-
-    # Bold only side pot players
-    df_leader["Name"] = df_leader["Name"].apply(lambda x: f"<b>{x}</b>" if x in side_pot_players else x)
-
-    return df_leader
-
-# Load all round data
-round_names = ["day_1", "day_2", "day_3", "day_4"]
-allowed_players, total_entries, total_prize_fund = load_eligible_player_names()
-
-# entry vars
-total_entries = int(total_entries)
-places_paid = calculate_places_paid(total_entries)
-round_dfs = {day: load_round_data(day, allowed_names=allowed_players) for day in round_names}
-
-round_dfs_all = {
-    day: load_round_data(day)  # no filtering
-    for day in round_names
-}
-
-
-# ----------------------- Streamlit UI -----------------------
-
-# Main UI layout
-with st.container():
-    # try:
-    #     st.image(
-    #         "https://upload.wikimedia.org/wikipedia/en/thumb/f/fd/Masters_Tournament_logo.svg/1920px-Masters_Tournament_logo.svg.png",
-    #         use_container_width=True
-    #     )
-    # except:
-    #     pass
-
-    st.markdown("""
-    <div style='text-align: center; padding: 0.5em 0 1em 0;'>
-        <h1 style="
-            color: #1A472A;
-            font-family: Georgia, serif;
-            font-size: 3.2em;
-            margin-bottom: 0;
-        ">The Heronsdale Hero</h1>
-        <h4 style="
-            color: #4F6022;
-            font-family: Georgia, serif;
-            margin-top: 0.2em;
-        ">Heronsdale Side Pot - Single Best Round</h4>
+# -------------------- UI --------------------
+st.markdown("""
+    <div style='text-align: center; padding: 0.5em 0;'>
+        <h1 style='color: #5E2CA5; font-size: 3em; font-family: Georgia;'>The <span style='color:#FF6F00;'>MidEx</span> Cup</h1>
+        <h4 style='color: #444;'>2024 (unofficial) Order of Merit</h4>
     </div>
-    """, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-tabs = st.tabs(["🏆 Main", "🕹 Official Heronsdale Leaderboard"])
+tabs = st.tabs(["🏆 Leaderboard", "📋 Rules", "📈 Event Results"])
 
-# Main Tab
 with tabs[0]:
-    # Entry metrics section
-    col1, col2, col3 = st.columns(3)
+    leaderboard_df = aggregate_points()
+    leaderboard_df["Position"] = leaderboard_df.index + 1
+    display_df = leaderboard_df[["Position", "Name", "Points"]]
+    st.markdown("### 🏁 Current Standings")
+    styled_leaderboard(display_df)
 
-    with col1:
-        unique_players = len(set(allowed_players))
-        st.metric("Total Entries", total_entries, help="Number of total score submissions")
-        st.caption(f"👤 {unique_players} unique players")
-
-    with col2:
-        st.metric("Prize Pool", f"£{total_prize_fund}")
-        st.caption(f"🏅 {places_paid} places paid")
-
-    with col3:
-        all_scores = pd.concat(round_dfs.values())
-        leading_score = int(all_scores["Score"].max()) if not all_scores.empty else "N/A"
-        st.metric("Leading Score", leading_score)
-        st.caption("🥇 Best stableford score across all rounds")
-
-    st.markdown("---")
-
-    # Rules and Payment side by side
-    col_left, col_right = st.columns(2)
-
-    with col_left:
-        st.markdown("### 📜 Rules")
-        st.markdown("""
-        - Played over the **Heronsdale weekend (Easter BH)**   
-        - Highest single round **Stableford** score counts toward the leaderboard  
-        - **£5 per round entry fee**  
-          - Must be paid **before** your round  
-          - £20 if you enter all 4 rounds  
-        - Rounds must be **WHS qualifiers** and **official Heronsdale entries** to qualify  
-        - **3 places paid** (1st: 50%, 2nd: 35%, 3rd: 15%)  
-          - One additional paid place for every 10 entries beyond 30 (up to 5 total)  
-        - *Ties broken by comparing second best score & then CB on 2nd round*
-        """)
-
-    with col_right:
-        st.markdown("### 📝 How do I sign up?")
-        st.markdown("""
-        Everyone is welcome: just send **Matt Wilson** your entry fee using one of the following:
-
-        - [Monzo](https://monzo.me/mattwilson1)  
-        - [PayPal](https://paypal.me/mattwilson1234)  
-        - Bank transfer (📱 drop Matt a WhatsApp)  
-        - Add credit to my pro shop account  
-        - Or arrange to pay cash (pls no)
-
-        ⚠️ *Entry must be confirmed before you play your round — no exceptions!*
-        """)
-
-
-    st.markdown("---")
-
-    # Leaderboard table
-    with st.container():
-        st.markdown("## 🥇 Leaderboard")
-        leaderboard = get_main_leaderboard(list(round_dfs.values()), allowed_players)
-        if leaderboard.empty:
-            st.info("No scores submitted yet.")
-        else:
-            styled_table(leaderboard)
-
-
-# Side Competition (Blank)
 with tabs[1]:
-    st.markdown("## 🕹 Official Heronsdale Leaderboard")
-    full_leaderboard = get_full_leaderboard(round_dfs_all, allowed_players)
-    styled_table(full_leaderboard)
+    st.markdown("### 📜 The Rules")
+    st.markdown("""
+    - The 2024 season features 12 official MidEx Cup events from **5th May to 29th Sept**.
+    - Players earn points based on their finishing position in each event.
+    - **Standard** = 300pts for 1st, **Elevated** = 550pts, **Major** = 750pts, **Playoff** = 1200pts.
+    - Only the **top 16** finishers earn points in each event.
+    - Final payout based on total points: **1st: 50%**, **2nd: 35%**, **3rd: 15%** of the prize pool.
+    """)
 
-    
+    st.markdown("### 💰 Prize Pool & Entry")
+    st.markdown("""
+    - £20 per player (all paid out).
+    - Points leaderboard determines winnings at end of season.
+    """)
+
+    st.markdown("### 🗓 Events")
+    event_df = pd.DataFrame([
+        {"Date": date, "Competition": name, "Label": label}
+        for date, (name, label) in zip([
+            "05/05/2024", "19/05/2024", "08/06/2024", "23/06/2024", 
+            "06/07/2024", "07/07/2024", "21/07/2024", "04/08/2024",
+            "10/09/2024", "18/09/2024", "15/09/2024", "29/09/2024"
+        ], EVENT_TABS.items())
+    ])
+    st.dataframe(event_df, use_container_width=True)
+
+with tabs[2]:
+    st.markdown("### 🔍 Individual Event Results")
+    selected_event = st.selectbox("Select an event", list(EVENT_TABS.keys()))
+    event_type = EVENT_TABS[selected_event]
+    results_df = load_event_results(selected_event)
+    results_df["Points"] = results_df["Position"].apply(lambda pos: calculate_points(event_type, pos))
+    st.dataframe(results_df, use_container_width=True)
