@@ -41,17 +41,23 @@ def get_gsheet_client():
     return gspread.authorize(creds)
 
 @st.cache_data(ttl=300)
+@st.cache_data(ttl=300)
 def load_event_results(sheet_name):
     client = get_gsheet_client()
     sheet = client.open(GOOGLE_SHEET_NAME).worksheet(sheet_name)
     data = sheet.get_all_values()
-    df = pd.DataFrame(data[1:], columns=data[0])
-    df = df[["Position", "Name"]]
+
+    if not data:
+        return pd.DataFrame(columns=["Position", "Name"])
+
+    # Assume first column = Name, second column = Position
+    df = pd.DataFrame([row[:2] for row in data], columns=["Name", "Position"])
     df["Position"] = pd.to_numeric(df["Position"], errors="coerce")
     df = df.dropna(subset=["Position"])
     df["Position"] = df["Position"].astype(int)
     df["Name"] = df["Name"].str.strip()
     return df.sort_values("Position")
+
 
 def calculate_points(event_type, position):
     table = POINTS_TABLE.get(event_type, [])
@@ -62,19 +68,32 @@ def aggregate_points():
     event_breakdown = defaultdict(list)
 
     for sheet_name, label in EVENT_TABS.items():
-        df = load_event_results(sheet_name)
+        try:
+            df = load_event_results(sheet_name)
+        except Exception as e:
+            st.warning(f"⚠️ Could not load event: {sheet_name}. Error: {e}")
+            continue
+
         for _, row in df.iterrows():
-            name = row["Name"]
-            pos = row["Position"]
+            name = row.get("Name", "").strip()
+            pos = row.get("Position", None)
+
+            if pd.isna(pos) or not isinstance(pos, int):
+                continue
+
             pts = calculate_points(label, pos)
             player_points[name] += pts
             event_breakdown[name].append((sheet_name, pts))
+
+    if not player_points:
+        return pd.DataFrame(columns=["Name", "Points", "Events"])
 
     leaderboard = pd.DataFrame([
         {"Name": name, "Points": points, "Events": event_breakdown[name]}
         for name, points in player_points.items()
     ])
     return leaderboard.sort_values("Points", ascending=False).reset_index(drop=True)
+
 
 def styled_leaderboard(df):
     def highlight(row):
@@ -100,34 +119,70 @@ def styled_leaderboard(df):
 st.markdown("""
     <div style='text-align: center; padding: 0.5em 0;'>
         <h1 style='color: #5E2CA5; font-size: 3em; font-family: Georgia;'>The <span style='color:#FF6F00;'>MidEx</span> Cup</h1>
-        <h4 style='color: #444;'>2024 (unofficial) Order of Merit</h4>
+        <h4 style='color: #444;'>2025 (unofficial) Order of Merit</h4>
     </div>
 """, unsafe_allow_html=True)
 
-tabs = st.tabs(["🏆 Leaderboard", "📋 Rules", "📈 Event Results"])
-
-with tabs[0]:
-    leaderboard_df = aggregate_points()
-    leaderboard_df["Position"] = leaderboard_df.index + 1
-    display_df = leaderboard_df[["Position", "Name", "Points"]]
-    st.markdown("### 🏁 Current Standings")
-    styled_leaderboard(display_df)
+tabs = st.tabs(["📋 Rules / Entry", "🏆 Leaderboard", "📈 Event Results"])
 
 with tabs[1]:
-    st.markdown("### 📜 The Rules")
-    st.markdown("""
-    - The 2024 season features 12 official MidEx Cup events from **5th May to 29th Sept**.
-    - Players earn points based on their finishing position in each event.
-    - **Standard** = 300pts for 1st, **Elevated** = 550pts, **Major** = 750pts, **Playoff** = 1200pts.
-    - Only the **top 16** finishers earn points in each event.
-    - Final payout based on total points: **1st: 50%**, **2nd: 35%**, **3rd: 15%** of the prize pool.
-    """)
+    leaderboard_df = aggregate_points()
+    leaderboard_df["Position"] = leaderboard_df.index + 1
 
-    st.markdown("### 💰 Prize Pool & Entry")
-    st.markdown("""
-    - £20 per player (all paid out).
-    - Points leaderboard determines winnings at end of season.
-    """)
+    # Top 3 metrics
+    top3 = leaderboard_df.head(3)
+
+    col1, col2, col3 = st.columns(3)
+    if len(top3) >= 1:
+        with col1:
+            st.metric(label=f"🥇 {top3.iloc[0]['Name']}", value=f"{int(top3.iloc[0]['Points'])} pts")
+    if len(top3) >= 2:
+        with col2:
+            st.metric(label=f"🥈 {top3.iloc[1]['Name']}", value=f"{int(top3.iloc[1]['Points'])} pts")
+    if len(top3) >= 3:
+        with col3:
+            st.metric(label=f"🥉 {top3.iloc[2]['Name']}", value=f"{int(top3.iloc[2]['Points'])} pts")
+
+    st.markdown("### 🏁 Current Standings")
+    display_df = leaderboard_df[["Position", "Name", "Points"]]
+    styled_leaderboard(display_df)
+
+
+with tabs[0]:
+    col_left, col_middle, col_right = st.columns(3)
+
+    with col_left:
+        st.markdown("### ❓ What even is this?")
+        st.markdown("""
+        - The 2025 golf season features 12 official MidEx Cup events from **4th May to 27th Sept**.
+        - Tour members can earn points based on their finishing position in each event, with an emphasis on wins and high places.
+        - Each event has a total number of points based on its profile - you can see how these are allocated in the table below.
+        - Only the **top 16** finishers earn points in each event.
+        """)
+
+    with col_middle:
+        st.markdown("### 🗳️ How can I enter?")
+        st.markdown("""
+        - Tour membership is £20, all of which will be paid out in prizes once the competition is finalised. 
+        - You can join at any point during the season but will only earn points for events after your entry.
+        - Entry can be confirmed by paying Matt Wilson £20, via:
+            - [Monzo](https://monzo.me/mattwilson1)  
+            - [PayPal](https://paypal.me/mattwilson1234)  
+            - Bank transfer (📱 drop Matt a WhatsApp)  
+            - Add credit to my pro shop account  
+            - Or arrange to pay cash (pls no)
+        """)
+
+    with col_right:
+        st.markdown("### 💰 What can I win?")
+        st.markdown("""
+        - 1st place will earn 50%, 2nd place will earn 35% and 3rd place will earn 15%.
+        - There are currently x players registered, with a total prize pool of:
+        - The current payounts are:
+            - 1st:
+            - 2nd:
+            - 3rd:
+        """)
 
     st.markdown("### 🗓 Events")
     event_df = pd.DataFrame([
@@ -139,6 +194,21 @@ with tabs[1]:
         ], EVENT_TABS.items())
     ])
     st.dataframe(event_df, use_container_width=True)
+
+    st.markdown("### 🧮 Points Distribution Table")
+
+    # Create and show the points distribution
+    max_places = max(len(v) for v in POINTS_TABLE.values())
+    places = list(range(1, max_places + 1))
+    
+    points_table_df = pd.DataFrame({"Place": places})
+
+    for event_type, points in POINTS_TABLE.items():
+        padded = points + [0] * (max_places - len(points))  # Fill with 0s
+        points_table_df[event_type] = padded
+
+    st.dataframe(points_table_df, use_container_width=True)
+
 
 with tabs[2]:
     st.markdown("### 🔍 Individual Event Results")
