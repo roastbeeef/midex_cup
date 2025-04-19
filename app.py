@@ -145,32 +145,36 @@ def get_main_leaderboard(dfs, side_pot_players):
 
 
 def get_full_leaderboard(round_dfs, side_pot_players):
-    # Combine all players from all rounds
+    # Collect all names from every round (no filtering!)
     all_names = set()
     for df in round_dfs.values():
-        all_names.update(df["Name"].unique())
-    
-    leaderboard_data = []
+        all_names.update(df["Name"].tolist())
 
-    for name in sorted(all_names):
+    all_names = sorted(all_names)
+
+    leaderboard_data = []
+    for name in all_names:
         scores = []
         for day in ["day_1", "day_2", "day_3", "day_4"]:
             df = round_dfs[day]
             score = df.loc[df["Name"] == name, "Score"]
-            scores.append(score.values[0] if not score.empty else None)
+            scores.append(score.values[0] if not score.empty else 0)
 
-        # Best 2 sum
-        best_two = sum(sorted([s for s in scores if s is not None], reverse=True)[:2])
+        best_two = sum(sorted(scores, reverse=True)[:2])
         leaderboard_data.append((name, *scores, best_two))
 
     df_leader = pd.DataFrame(leaderboard_data, columns=["Name", "Round 1", "Round 2", "Round 3", "Round 4", "Best 2"])
     df_leader = df_leader.sort_values(by="Best 2", ascending=False).reset_index(drop=True)
-    
-    # Add bold formatting for side pot players
-    def bold_name(name):
-        return f"<b>{name}</b>" if name in side_pot_players else name
 
-    df_leader["Name"] = df_leader["Name"].apply(bold_name)
+    df_leader["Medal"] = df_leader.index.map({0: "🥇", 1: "🥈", 2: "🥉"}).fillna("")
+    df_leader["Position"] = df_leader.index + 1
+
+    # Reorder columns
+    columns = ["Position", "Medal", "Name", "Round 1", "Round 2", "Round 3", "Round 4", "Best 2"]
+    df_leader = df_leader[columns]
+
+    # Bold only side pot players
+    df_leader["Name"] = df_leader["Name"].apply(lambda x: f"<b>{x}</b>" if x in side_pot_players else x)
 
     return df_leader
 
@@ -182,6 +186,11 @@ allowed_players, total_entries, total_prize_fund = load_eligible_player_names()
 total_entries = int(total_entries)
 places_paid = calculate_places_paid(total_entries)
 round_dfs = {day: load_round_data(day, allowed_names=allowed_players) for day in round_names}
+
+round_dfs_all = {
+    day: load_round_data(day)  # no filtering
+    for day in round_names
+}
 
 
 # ----------------------- Streamlit UI -----------------------
@@ -283,7 +292,7 @@ with tabs[0]:
 # Side Competition (Blank)
 with tabs[1]:
     st.markdown("## 🕹 Official Heronsdale Leaderboard")
-    full_leaderboard = get_full_leaderboard(round_dfs, allowed_players)
+    full_leaderboard = get_full_leaderboard(round_dfs_all, allowed_players)
     styled_table(full_leaderboard)
 
     
