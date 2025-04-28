@@ -185,7 +185,7 @@ st.markdown("""
     }
     .midex-header h1 {
         font-size: 2.8rem;
-        color: #2c2c2c;
+        color:  #95a5a6;
         font-weight: 600;
         margin-bottom: 0;
         font-family: 'Segoe UI', sans-serif;
@@ -218,8 +218,8 @@ st.markdown("""
 # -------------------- UI --------------------
 st.markdown("""
 <div class="midex-header">
-    <h1>The <span class="purple">Mid</span><span class="orange">Ex</span> Cup</h1>
-    <h4>2025 <i>Unofficial</i> Order of Merit</h4>
+    <h1>The<span class="purple">Mid</span><span class="orange">Ex</span>Cup</h1>
+    <h4>2025 MSGC <i><b>Unofficial</b></i> Order of Merit</h4>
 </div>
 """, unsafe_allow_html=True)
 
