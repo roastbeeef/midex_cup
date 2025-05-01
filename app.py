@@ -54,6 +54,20 @@ def get_gsheet_client():
     return gspread.authorize(creds)
 
 @st.cache_data(ttl=300)
+def load_eligible_player_names():
+    client = get_gsheet_client()
+    sheet = client.open(GOOGLE_SHEET_NAME).worksheet("entries")
+    
+    # Get all values from column A starting from row 2
+    data = sheet.col_values(1)[1:]  # Skips the header (row 1)
+
+    eligible_names = pd.Series(data).dropna().unique().tolist()  # Remove NaN and get unique names
+    total_entries = len(eligible_names)  # Total entries are the count of unique names
+    total_prize_fund = total_entries * 20  # Assuming £20 entry fee per player
+
+    return [name.strip() for name in eligible_names], total_entries, total_prize_fund
+
+@st.cache_data(ttl=300)
 def load_event_results(sheet_name):
     client = get_gsheet_client()
     sheet = client.open(GOOGLE_SHEET_NAME).worksheet(sheet_name)
@@ -228,8 +242,10 @@ st.markdown("""
 leaderboard_df = aggregate_points()
 leaderboard_df["Position"] = leaderboard_df.index + 1
 
-entries = leaderboard_df["Name"].nunique()
-prize_pool = entries * 20
+
+entrants_list, entries, prize_pool = load_eligible_player_names()
+
+# entries = leaderboard_df["Name"].nunique()
 leader_name = leaderboard_df.iloc[0]["Name"] if not leaderboard_df.empty else "TBD"
 leader_points = leaderboard_df.iloc[0]["Points"] if not leaderboard_df.empty else 0
 
