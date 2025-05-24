@@ -330,10 +330,17 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("🔍 Event Breakdown")
     selected_event = st.selectbox("Select event", list(EVENT_TABS.keys()))
-    results_df = load_event_results(selected_event)
-    label = EVENT_TABS[selected_event]
-    results_df["Points"] = results_df["Position"].apply(lambda x: calculate_points(label, x))
-    st.dataframe(results_df, use_container_width=True)
+    try:
+        results_df = load_event_results(selected_event)
+        if results_df.empty:
+            st.info("No results available for this event yet.")
+        else:
+            label = EVENT_TABS[selected_event]
+            results_df["Points"] = results_df["Position"].apply(lambda x: calculate_points(label, x))
+            st.dataframe(results_df, use_container_width=True)
+    except Exception as e:
+        st.warning(f"⚠️ Could not load results for {selected_event}. Error: {e}")
+
 
 with tabs[3]:
     st.subheader("💯 Points Distribution")
