@@ -4,6 +4,7 @@ import gspread
 import datetime
 from oauth2client.service_account import ServiceAccountCredentials
 from collections import defaultdict
+import re
 
 # CONFIG
 GOOGLE_SHEET_NAME = "midex_2025"
@@ -44,6 +45,25 @@ EVENT_DATES = [
     "27/09/2025"
 ]
 
+def parse_position(pos_str):
+    """Extract numeric part from '1st', '2nd', '10th' etc."""
+    if not isinstance(pos_str, str):
+        return None
+    match = re.match(r"^(\d+)", pos_str.strip())
+    return int(match.group(1)) if match else None
+
+@st.cache_data(ttl=300)
+def load_all_event_data():
+    all_data = {}
+    for sheet_name in EVENT_TABS:
+        try:
+            df = load_event_results(sheet_name)
+            all_data[sheet_name] = df
+        except Exception as e:
+            all_data[sheet_name] = pd.DataFrame(columns=["Position", "Name", "Score"])
+            st.warning(f"⚠️ Failed to load {sheet_name}: {e}")
+    return all_data
+
 @st.cache_resource
 def get_gsheet_client():
     creds_dict = dict(st.secrets["gcp_service_account"])
@@ -73,56 +93,59 @@ def load_event_results(sheet_name):
     sheet = client.open(GOOGLE_SHEET_NAME).worksheet(sheet_name)
     data = sheet.get_all_values()
 
-    if results_df.empty:
-        st.info("No results available for this event yet.")
-    else:
-        label = EVENT_TABS[selected_event]
-        results_df["Points"] = results_df["Position"].apply(lambda x: calculate_points(label, x))
-        st.dataframe(results_df, use_container_width=True)
+    # checks length of first row, if its less than 4, return empty dataframe
+    if not data or len(data[0]) < 4:
+        return pd.DataFrame(columns=["Position", "Name", "Score"])
 
-    # Assume first column = Name, second column = Position
-    df = pd.DataFrame([row[:2] for row in data], columns=["Name", "Position"])
-    df["Position"] = pd.to_numeric(df["Position"], errors="coerce")
-    df = df.dropna(subset=["Position"])
-    df["Position"] = df["Position"].astype(int)
-    df["Name"] = df["Name"].str.strip()
-    return df.sort_values("Position")
+    # iterate over the data
+    results = []
+    for row in data:
+        try:
+            name = row[0].strip()
+            position = row[1].strip()
+            score = row[3].strip()
+            results.append((position, name, score))
+        except (IndexError, ValueError):
+            continue  # skip rows that don't conform
 
+    if not results:
+        return pd.DataFrame(columns=["Position", "Name", "Score"])
+
+    df = pd.DataFrame(results, columns=["Position", "Name", "Score"])
+    return df
 
 def calculate_points(event_type, position):
     table = POINTS_TABLE.get(event_type, [])
     return table[position - 1] if 1 <= position <= len(table) else 0
 
-def aggregate_points():
+def aggregate_points(event_data, entrants_list):
     player_points = defaultdict(int)
     event_breakdown = defaultdict(list)
 
     for sheet_name, label in EVENT_TABS.items():
-        try:
-            df = load_event_results(sheet_name)
-            for _, row in df.iterrows():
-                name = row.get("Name", "").strip()
-                pos = row.get("Position", None)
-
-                if pd.isna(pos) or not isinstance(pos, int):
-                    continue
-
-                pts = calculate_points(label, pos)
-                player_points[name] += pts
-                event_breakdown[name].append((sheet_name, pts))
-        except Exception as e:
-            st.warning(f"⚠️ Could not load event: {sheet_name}. Error: {e}")
+        df = event_data.get(sheet_name, pd.DataFrame())
+        if df.empty:
             continue
+
+        for _, row in df.iterrows():
+            name = row.get("Name", "").strip()
+            pos_raw = row.get("Position", None)
+            pos = parse_position(pos_raw)
+            if pos is None:
+                continue
+
+            pts = calculate_points(label, pos)
+            player_points[name] += pts
+            event_breakdown[name].append((sheet_name, pts))
 
     if not player_points:
         return pd.DataFrame(columns=["Name", "Points", "Events"])
 
     leaderboard = pd.DataFrame([
         {"Name": name, "Points": points, "Events": event_breakdown[name]}
-        for name, points in player_points.items()
+        for name, points in player_points.items() if name in entrants_list and points > 0
     ])
     return leaderboard.sort_values("Points", ascending=False).reset_index(drop=True)
-
 
 
 def styled_leaderboard(df):
@@ -241,13 +264,12 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+entrants_list, entries, prize_pool = load_eligible_player_names()
 
-
-leaderboard_df = aggregate_points()
+event_data = load_all_event_data()
+leaderboard_df = aggregate_points(event_data, entrants_list)
 leaderboard_df["Position"] = leaderboard_df.index + 1
 
-
-entrants_list, entries, prize_pool = load_eligible_player_names()
 
 # entries = leaderboard_df["Name"].nunique()
 leader_name = leaderboard_df.iloc[0]["Name"] if not leaderboard_df.empty else "TBD"
@@ -275,7 +297,6 @@ with col3:
 tabs = st.tabs(["📋 Rules / Entry", "🏆 Leaderboard", "📈 Event Results", "💯 Point Rewards Table"])
 
 with tabs[0]:
-    
     col_left, col_right = st.columns(2)
     with col_left:
         st.markdown("### ❓ What even is this?")
@@ -331,13 +352,11 @@ with tabs[2]:
     st.subheader("🔍 Event Breakdown")
     selected_event = st.selectbox("Select event", list(EVENT_TABS.keys()))
     try:
-        results_df = load_event_results(selected_event)
+        results_df = event_data.get(selected_event, pd.DataFrame())
         if results_df.empty:
-            st.info("No results available for this event yet.")
+            st.info("No results yet for this event.")
         else:
-            label = EVENT_TABS[selected_event]
-            results_df["Points"] = results_df["Position"].apply(lambda x: calculate_points(label, x))
-            st.dataframe(results_df, use_container_width=True)
+            st.markdown(df_to_html_table(results_df), unsafe_allow_html=True)
     except Exception as e:
         st.warning(f"⚠️ Could not load results for {selected_event}. Error: {e}")
 
