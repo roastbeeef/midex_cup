@@ -100,20 +100,19 @@ def aggregate_points():
     for sheet_name, label in EVENT_TABS.items():
         try:
             df = load_event_results(sheet_name)
+            for _, row in df.iterrows():
+                name = row.get("Name", "").strip()
+                pos = row.get("Position", None)
+
+                if pd.isna(pos) or not isinstance(pos, int):
+                    continue
+
+                pts = calculate_points(label, pos)
+                player_points[name] += pts
+                event_breakdown[name].append((sheet_name, pts))
         except Exception as e:
             st.warning(f"⚠️ Could not load event: {sheet_name}. Error: {e}")
             continue
-
-        for _, row in df.iterrows():
-            name = row.get("Name", "").strip()
-            pos = row.get("Position", None)
-
-            if pd.isna(pos) or not isinstance(pos, int):
-                continue
-
-            pts = calculate_points(label, pos)
-            player_points[name] += pts
-            event_breakdown[name].append((sheet_name, pts))
 
     if not player_points:
         return pd.DataFrame(columns=["Name", "Points", "Events"])
@@ -123,6 +122,7 @@ def aggregate_points():
         for name, points in player_points.items()
     ])
     return leaderboard.sort_values("Points", ascending=False).reset_index(drop=True)
+
 
 
 def styled_leaderboard(df):
