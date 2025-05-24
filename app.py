@@ -350,7 +350,10 @@ with tabs[1]:
 
 with tabs[2]:
     st.subheader("🔍 Event Breakdown")
-    selected_event = st.selectbox("Select event", list(EVENT_TABS.keys()))
+    if "selected_event" not in st.session_state:
+        st.session_state.selected_event = list(EVENT_TABS.keys())[0]
+        selected_event = st.selectbox("Select event", list(EVENT_TABS.keys()), index=list(EVENT_TABS.keys()).index(st.session_state.selected_event))
+        st.session_state.selected_event = selected_event
     try:
         results_df = event_data.get(selected_event, pd.DataFrame())
         if results_df.empty:
