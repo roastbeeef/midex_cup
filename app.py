@@ -73,8 +73,12 @@ def load_event_results(sheet_name):
     sheet = client.open(GOOGLE_SHEET_NAME).worksheet(sheet_name)
     data = sheet.get_all_values()
 
-    if not data:
-        return pd.DataFrame(columns=["Position", "Name"])
+    if results_df.empty:
+        st.info("No results available for this event yet.")
+    else:
+        label = EVENT_TABS[selected_event]
+        results_df["Points"] = results_df["Position"].apply(lambda x: calculate_points(label, x))
+        st.dataframe(results_df, use_container_width=True)
 
     # Assume first column = Name, second column = Position
     df = pd.DataFrame([row[:2] for row in data], columns=["Name", "Position"])
