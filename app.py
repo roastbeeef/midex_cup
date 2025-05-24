@@ -277,7 +277,19 @@ leader_points = leaderboard_df.iloc[0]["Points"] if not leaderboard_df.empty els
 
 today = datetime.datetime.today()
 event_dates_dt = [datetime.datetime.strptime(date, "%d/%m/%Y") for date in EVENT_DATES]
-future_events = [(name, d) for (name, _), d in zip(EVENT_TABS.items(), event_dates_dt) if d >= today]
+
+# determine which have results
+events_with_results = {
+    name for name, df in event_data.items()
+    if not df.empty
+}
+
+# only include events that dont have results
+future_events = [
+    (name, d) for (name, _), d in zip(EVENT_TABS.items(), event_dates_dt)
+    if d >= today and name not in events_with_results
+]
+
 if future_events:
     next_event, next_date = future_events[0]
 else:
@@ -352,7 +364,7 @@ with tabs[2]:
     st.subheader("🔍 Event Breakdown")
     if "selected_event" not in st.session_state:
         st.session_state.selected_event = list(EVENT_TABS.keys())[0]
-        
+
     selected_event = st.selectbox("Select event", list(EVENT_TABS.keys()), index=list(EVENT_TABS.keys()).index(st.session_state.selected_event))
     st.session_state.selected_event = selected_event
     try:
